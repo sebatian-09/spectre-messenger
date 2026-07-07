@@ -98,22 +98,25 @@ class SpectreServer:
     
     async def broadcast_user_list(self):
         """Send updated user list to all clients"""
-        await broadcast_json(self.clients.values(), {
+        await broadcast_json(self.clients, {
             'type': 'user_list',
             'users': list(self.clients.keys())
-        })
+        }, logger=logger, context="user list broadcast")
     
     async def handle_public_key(self, username, public_key_hex):
         """Store and broadcast public key"""
+        if not username:
+            logger.warning("Received public key before registration; ignoring")
+            return
         self.public_keys[username] = public_key_hex
         logger.info(f"Public key registered for {username}")
         
         # Broadcast to all clients
-        await broadcast_json(self.clients.values(), {
+        await broadcast_json(self.clients, {
             'type': 'public_key',
             'username': username,
             'public_key': public_key_hex
-        })
+        }, logger=logger, context="public key broadcast")
     
     async def handle_message(self, sender, recipient, encrypted_message):
         """Route encrypted message to recipient"""
@@ -130,8 +133,11 @@ class SpectreServer:
             })
             logger.info(f"Message routed from {sender} to {recipient}")
             return True
-        except:
-            logger.error(f"Failed to send message to {recipient}")
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning(f"Recipient {recipient} disconnected before message delivery")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to send message to {recipient}: {e}")
             return False
     
     async def handle_client(self, websocket):
@@ -192,8 +198,13 @@ class SpectreServer:
                             recipient,
                             encrypted_data
                         )
+
+                    elif msg_type is not None:
+                        logger.warning(f"Unknown message type: {msg_type}")
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON from {username or 'unknown'}")
+                except KeyError as e:
+                    logger.error(f"Malformed message missing required field {e}")
                 except Exception as e:
                     logger.error(f"Error handling message: {e}")
         

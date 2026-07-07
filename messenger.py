@@ -3,6 +3,7 @@ import json
 import base64
 import time
 import os
+import traceback
 import websockets
 from dataclasses import dataclass
 from typing import Optional, Set
@@ -42,6 +43,7 @@ class SpectreMessenger:
         self.connected = False
         self.online_users = set()
         self._seen_nonces: Set[str] = set()  # replay protection
+        self.listener_task = None
         
     async def send_message(self, recipient, content):
         """Send an anonymous, encrypted message"""
@@ -56,7 +58,9 @@ class SpectreMessenger:
         
         # 1. Get or establish shared secret
         if recipient not in self.shared_secrets:
-            await self._establish_secure_channel(recipient)
+            if not await self._establish_secure_channel(recipient):
+                print(f"❌ Could not establish secure channel with {recipient}")
+                return False
         
         secret = self.shared_secrets[recipient]
         
@@ -82,11 +86,19 @@ class SpectreMessenger:
         wrapped = base64.b64encode(encrypted).decode()
         
         # 5. Send through network
-        await send_json(self.websocket, {
-            'type': 'message',
-            'to': recipient,
-            'encrypted_data': wrapped
-        })
+        try:
+            await send_json(self.websocket, {
+                'type': 'message',
+                'to': recipient,
+                'encrypted_data': wrapped
+            })
+        except websockets.exceptions.ConnectionClosed:
+            print("❌ Connection lost while sending message")
+            self.connected = False
+            return False
+        except Exception as e:
+            print(f"❌ Failed to send message to {recipient}: {e}")
+            return False
         
         print(f"✓ Message sent anonymously to {recipient}")
         return True
@@ -112,12 +124,24 @@ class SpectreMessenger:
             self.connected = True
             print(f"✓ Connected to server as {self.username}")
             
-            # Start listening for messages
-            listener_task = asyncio.create_task(self._listen_for_messages())
-            listener_task.add_done_callback(lambda t: print(f"Listener task ended: {t.exception() if t.exception() else 'normally'}"))
+            # Start listening for messages (keep a reference so the task isn't GC'd)
+            self.listener_task = asyncio.create_task(self._listen_for_messages())
+            self.listener_task.add_done_callback(self._on_listener_done)
             
         except Exception as e:
             print(f"❌ Failed to connect to server: {e}")
+            self.connected = False
+            self.websocket = None
+
+    def _on_listener_done(self, task):
+        """Report why the listener task stopped."""
+        self.connected = False
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            print(f"❌ Listener task stopped with error: {exc}")
     
     async def _listen_for_messages(self):
         """Listen for incoming messages from server"""
@@ -155,11 +179,11 @@ class SpectreMessenger:
         
         except websockets.exceptions.ConnectionClosed as e:
             print(f"❌ Disconnected from server: {e}")
-            self.connected = False
         except Exception as e:
             print(f"❌ Error receiving messages: {e}")
-            import traceback
             traceback.print_exc()
+        finally:
+            self.connected = False
     
     async def _process_received_message(self, sender, wrapped):
         """Process and decrypt received message"""
@@ -215,10 +239,15 @@ class SpectreMessenger:
             
             if peer not in self.peers:
                 print(f"❌ Could not get public key for {peer}")
-                return
+                return False
         
         # Generate shared secret
-        secret = self.crypto.derive_shared_secret(self.peers[peer])
+        try:
+            secret = self.crypto.derive_shared_secret(self.peers[peer])
+        except Exception as e:
+            print(f"❌ Failed to derive shared secret with {peer}: {e}")
+            return False
         self.shared_secrets[peer] = secret
         
         print(f"✓ Secure channel established with {peer}")
+        return True
