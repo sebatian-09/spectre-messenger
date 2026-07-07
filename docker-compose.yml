@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  spectre-server:
+    build: .
+    ports:
+      - "8765:8765"
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8765
