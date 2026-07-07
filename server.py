@@ -3,6 +3,7 @@ import websockets
 import json
 import logging
 from typing import Dict, Set
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -148,9 +149,26 @@ class SpectreServer:
             if username:
                 await self.unregister(username)
     
+    async def health_check(self, request):
+        """Health check endpoint for Render"""
+        return web.Response(text="OK", status=200)
+    
     async def start(self):
         """Start the server"""
         logger.info(f"Starting Spectre server on {self.host}:{self.port}")
+        
+        # Create HTTP app for health checks
+        app = web.Application()
+        app.router.add_get('/', self.health_check)
+        app.router.add_head('/', self.health_check)
+        
+        # Start HTTP server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, self.host, self.port)
+        await site.start()
+        
+        # Start WebSocket server on same port
         async with websockets.serve(self.handle_client, self.host, self.port):
             await asyncio.Future()  # Run forever
 
