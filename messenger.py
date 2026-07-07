@@ -50,7 +50,8 @@ class SpectreMessenger:
         
         # 1. Get or establish shared secret
         if recipient not in self.shared_secrets:
-            await self._establish_secure_channel(recipient)
+            if not await self._establish_secure_channel(recipient):
+                return False
         
         secret = self.shared_secrets[recipient]
         
@@ -182,7 +183,22 @@ class SpectreMessenger:
                     print(f"⚠️ Failed to decrypt message from {sender}: {e}")
             else:
                 print(f"⚠️ No shared secret with {sender}, establishing channel...")
-                await self._establish_secure_channel(sender)
+                if not await self._establish_secure_channel(sender):
+                    return
+
+                decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
+                data = json.loads(decrypted)
+
+                if time.time() - data['timestamp'] > 300:
+                    print(f"⚠ Message from {sender} expired")
+                    return
+
+                print(f"\n📩 Message from {sender}: {data['content']}")
+                self.message_history.append({
+                    'from': sender,
+                    'content': data['content'],
+                    'timestamp': data['timestamp']
+                })
         
         except Exception as e:
             print(f"⚠️ Error processing message: {e}")
@@ -199,10 +215,11 @@ class SpectreMessenger:
             
             if peer not in self.peers:
                 print(f"❌ Could not get public key for {peer}")
-                return
+                return False
         
         # Generate shared secret
         secret = self.crypto.derive_shared_secret(self.peers[peer])
         self.shared_secrets[peer] = secret
         
         print(f"✓ Secure channel established with {peer}")
+        return True

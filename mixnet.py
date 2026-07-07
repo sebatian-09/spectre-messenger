@@ -1,8 +1,6 @@
 import asyncio
-import websockets
 import json
 import base64
-from typing import List, Dict
 import random
 import time
 
@@ -91,5 +89,5 @@ class OnionRouter:
         try:
             data = json.loads(base64.b64decode(wrapped_message))
             return data['payload']
-        except:
+        except Exception:
             return wrapped_message

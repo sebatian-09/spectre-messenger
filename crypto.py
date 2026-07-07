@@ -1,12 +1,10 @@
 import os
 import hashlib
-import hmac
-import time
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 import blake3
 
 class SpectreCrypto:
@@ -21,13 +19,19 @@ class SpectreCrypto:
         peer_key = x25519.X25519PublicKey.from_public_bytes(peer_public_key_bytes)
         shared_secret = self.private_key.exchange(peer_key)
         
-        # Double KDF for extra safety
+        local_public_key_bytes = self.public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        salt = hashlib.sha256(
+            b"|".join(sorted([local_public_key_bytes, peer_public_key_bytes]))
+        ).digest()
+
         kdf = HKDF(
             algorithm=hashes.BLAKE2b(64),
             length=32,
-            salt=b'spectre_salt_v1',
+            salt=salt,
             info=b'handshake',
-            backend=default_backend()
         )
         return kdf.derive(shared_secret)
     

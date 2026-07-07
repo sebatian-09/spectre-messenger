@@ -2,8 +2,8 @@ import asyncio
 import websockets
 import json
 import logging
-from typing import Dict, Set
-from aiohttp import web
+from typing import Dict
+from websockets.http11 import Headers, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,11 +62,15 @@ class SpectreServer:
         for client in clients_copy:
             try:
                 await client.send(message)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to broadcast user list: {e}")
     
     async def handle_public_key(self, username, public_key_hex):
         """Store and broadcast public key"""
+        if not username:
+            logger.warning("Ignoring public key before registration")
+            return
+
         self.public_keys[username] = public_key_hex
         logger.info(f"Public key registered for {username}")
         
@@ -80,8 +84,8 @@ class SpectreServer:
         for client in self.clients.values():
             try:
                 await client.send(message)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to broadcast public key: {e}")
     
     async def handle_message(self, sender, recipient, encrypted_message):
         """Route encrypted message to recipient"""
@@ -100,9 +104,21 @@ class SpectreServer:
             await recipient_ws.send(message)
             logger.info(f"Message routed from {sender} to {recipient}")
             return True
-        except:
-            logger.error(f"Failed to send message to {recipient}")
+        except Exception as e:
+            logger.error(f"Failed to send message to {recipient}: {e}")
             return False
+
+    async def process_request(self, connection, request):
+        """Serve health checks over the websocket port."""
+        if request.path in {"/", "/health"}:
+            return Response(
+                200,
+                "OK",
+                Headers([("Content-Type", "text/plain; charset=utf-8")]),
+                b"OK",
+            )
+
+        return None
     
     async def handle_client(self, websocket):
         """Handle client connection"""
@@ -149,27 +165,16 @@ class SpectreServer:
             if username:
                 await self.unregister(username)
     
-    async def health_check(self, request):
-        """Health check endpoint for Render"""
-        return web.Response(text="OK", status=200)
-    
     async def start(self):
         """Start the server"""
         logger.info(f"Starting Spectre server on {self.host}:{self.port}")
-        
-        # Create HTTP app for health checks
-        app = web.Application()
-        app.router.add_get('/', self.health_check)
-        app.router.add_head('/', self.health_check)
-        
-        # Start HTTP server
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-        
-        # Start WebSocket server on same port
-        async with websockets.serve(self.handle_client, self.host, self.port):
+
+        async with websockets.serve(
+            self.handle_client,
+            self.host,
+            self.port,
+            process_request=self.process_request,
+        ):
             await asyncio.Future()  # Run forever
 
 async def main():
