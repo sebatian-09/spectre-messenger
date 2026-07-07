@@ -11,6 +11,7 @@ import hashlib
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
 from mixnet import MixNode, OnionRouter
+from netutils import send_json
 
 @dataclass
 class Message:
@@ -76,11 +77,11 @@ class SpectreMessenger:
         wrapped = base64.b64encode(encrypted).decode()
         
         # 5. Send through network
-        await self.websocket.send(json.dumps({
+        await send_json(self.websocket, {
             'type': 'message',
             'to': recipient,
             'encrypted_data': wrapped
-        }))
+        })
         
         print(f"✓ Message sent anonymously to {recipient}")
         return True
@@ -91,17 +92,17 @@ class SpectreMessenger:
             self.websocket = await websockets.connect(self.server_url)
             
             # Register with server
-            await self.websocket.send(json.dumps({
+            await send_json(self.websocket, {
                 'type': 'register',
                 'username': self.username
-            }))
+            })
             
             # Send our public key
             pubkey_hex = self.crypto.public_key.public_bytes_raw().hex()
-            await self.websocket.send(json.dumps({
+            await send_json(self.websocket, {
                 'type': 'public_key',
                 'public_key': pubkey_hex
-            }))
+            })
             
             self.connected = True
             print(f"✓ Connected to server as {self.username}")

@@ -31,9 +31,14 @@ class SpectreCrypto:
         )
         return kdf.derive(shared_secret)
     
+    @staticmethod
+    def _derive_encryption_key(shared_secret):
+        """Derive the symmetric ChaCha20-Poly1305 key from a shared secret"""
+        return blake3.blake3(shared_secret + b'encrypt').digest(32)
+    
     def encrypt_message(self, message, shared_secret):
         """ChaCha20-Poly1305 with random nonce"""
-        key = blake3.blake3(shared_secret + b'encrypt').digest(32)
+        key = self._derive_encryption_key(shared_secret)
         nonce = os.urandom(12)  # ChaCha20 uses 12-byte nonce
         cipher = ChaCha20Poly1305(key)
         ciphertext = cipher.encrypt(nonce, message.encode(), b'')
@@ -43,6 +48,6 @@ class SpectreCrypto:
         """Decrypt with authentication"""
         nonce = encrypted_data[:12]
         ciphertext = encrypted_data[12:]
-        key = blake3.blake3(shared_secret + b'encrypt').digest(32)
+        key = self._derive_encryption_key(shared_secret)
         cipher = ChaCha20Poly1305(key)
         return cipher.decrypt(nonce, ciphertext, b'').decode()

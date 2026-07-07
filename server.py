@@ -5,6 +5,8 @@ import logging
 from typing import Dict, Set
 from aiohttp import web
 
+from netutils import send_json, broadcast_json
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,18 +23,18 @@ class SpectreServer:
         """Register a new client"""
         if username in self.clients:
             logger.warning(f"Username {username} already taken")
-            await websocket.send(json.dumps({
+            await send_json(websocket, {
                 'type': 'error',
                 'message': 'Username already taken'
-            }))
+            })
             return False
         
         self.clients[username] = websocket
         logger.info(f"User {username} connected")
-        await websocket.send(json.dumps({
+        await send_json(websocket, {
             'type': 'registered',
             'username': username
-        }))
+        })
         
         # Broadcast user list to all clients
         await self.broadcast_user_list()
@@ -51,19 +53,10 @@ class SpectreServer:
     
     async def broadcast_user_list(self):
         """Send updated user list to all clients"""
-        user_list = list(self.clients.keys())
-        message = json.dumps({
+        await broadcast_json(self.clients.values(), {
             'type': 'user_list',
-            'users': user_list
+            'users': list(self.clients.keys())
         })
-        
-        # Send to all connected clients (make a copy to avoid modification during iteration)
-        clients_copy = list(self.clients.values())
-        for client in clients_copy:
-            try:
-                await client.send(message)
-            except:
-                pass
     
     async def handle_public_key(self, username, public_key_hex):
         """Store and broadcast public key"""
@@ -71,17 +64,11 @@ class SpectreServer:
         logger.info(f"Public key registered for {username}")
         
         # Broadcast to all clients
-        message = json.dumps({
+        await broadcast_json(self.clients.values(), {
             'type': 'public_key',
             'username': username,
             'public_key': public_key_hex
         })
-        
-        for client in self.clients.values():
-            try:
-                await client.send(message)
-            except:
-                pass
     
     async def handle_message(self, sender, recipient, encrypted_message):
         """Route encrypted message to recipient"""
@@ -90,14 +77,12 @@ class SpectreServer:
             return False
         
         recipient_ws = self.clients[recipient]
-        message = json.dumps({
-            'type': 'message',
-            'from': sender,
-            'encrypted_data': encrypted_message
-        })
-        
         try:
-            await recipient_ws.send(message)
+            await send_json(recipient_ws, {
+                'type': 'message',
+                'from': sender,
+                'encrypted_data': encrypted_message
+            })
             logger.info(f"Message routed from {sender} to {recipient}")
             return True
         except:
@@ -121,11 +106,11 @@ class SpectreServer:
                         if await self.register(websocket, username):
                             # Send existing public keys to new user
                             for user, pubkey in self.public_keys.items():
-                                await websocket.send(json.dumps({
+                                await send_json(websocket, {
                                     'type': 'public_key',
                                     'username': user,
                                     'public_key': pubkey
-                                }))
+                                })
                     
                     elif data['type'] == 'public_key':
                         await self.handle_public_key(username, data['public_key'])
