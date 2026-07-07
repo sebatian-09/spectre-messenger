@@ -1,10 +1,8 @@
 import asyncio
-import websockets
 import json
 import base64
 import binascii
 import logging
-from typing import List, Dict
 import random
 import time
 

@@ -1,12 +1,13 @@
 import asyncio
-import re
-import websockets
 import json
 import logging
+import re
 import time
 from collections import defaultdict
-from typing import Dict, Set
-from aiohttp import web
+from typing import Dict
+
+import websockets
+from websockets.http11 import Headers, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,9 +20,10 @@ MAX_CLIENTS = 1000
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_MESSAGES = 60  # messages per window per user
 
+
 class SpectreServer:
     """WebSocket server for peer-to-peer encrypted messaging"""
-    
+
     def __init__(self, host='localhost', port=8765):
         self.host = host
         self.port = port
@@ -39,15 +41,12 @@ class SpectreServer:
         """Return True if user is within rate limit, False if exceeded"""
         now = time.time()
         timestamps = self._message_counts[username]
-        # Prune old entries
-        self._message_counts[username] = [
-            t for t in timestamps if now - t < RATE_LIMIT_WINDOW
-        ]
+        self._message_counts[username] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
         if len(self._message_counts[username]) >= RATE_LIMIT_MAX_MESSAGES:
             return False
         self._message_counts[username].append(now)
         return True
-        
+
     async def register(self, websocket, username):
         """Register a new client"""
         if not self._is_valid_username(username):
@@ -71,29 +70,29 @@ class SpectreServer:
                 'message': 'Username already taken'
             }))
             return False
-        
+
         self.clients[username] = websocket
         logger.info(f"User {username} connected")
         await websocket.send(json.dumps({
             'type': 'registered',
             'username': username
         }))
-        
-        # Broadcast user list to all clients
+
         await self.broadcast_user_list()
         return True
-    
+
     async def unregister(self, username):
         """Unregister a client"""
         if username in self.clients:
             del self.clients[username]
             if username in self.public_keys:
                 del self.public_keys[username]
+            if username in self._message_counts:
+                del self._message_counts[username]
             logger.info(f"User {username} disconnected")
-            # Don't broadcast during shutdown to avoid race conditions
             if len(self.clients) > 0:
                 await self.broadcast_user_list()
-    
+
     async def broadcast_user_list(self):
         """Send updated user list to all clients"""
         user_list = list(self.clients.keys())
@@ -101,8 +100,7 @@ class SpectreServer:
             'type': 'user_list',
             'users': user_list
         })
-        
-        # Send to all connected clients (make a copy to avoid modification during iteration)
+
         clients_copy = list(self.clients.items())
         for name, client in clients_copy:
             try:
@@ -111,22 +109,22 @@ class SpectreServer:
                 logger.info(f"Client {name} disconnected during user list broadcast")
             except Exception as e:
                 logger.error(f"Failed to send user list to {name}: {e}")
-    
+
     async def handle_public_key(self, username, public_key_hex):
         """Store and broadcast public key"""
         if not username:
             logger.warning("Received public key before registration; ignoring")
             return
+
         self.public_keys[username] = public_key_hex
         logger.info(f"Public key registered for {username}")
-        
-        # Broadcast to all clients
+
         message = json.dumps({
             'type': 'public_key',
             'username': username,
             'public_key': public_key_hex
         })
-        
+
         for name, client in list(self.clients.items()):
             try:
                 await client.send(message)
@@ -134,20 +132,20 @@ class SpectreServer:
                 logger.info(f"Client {name} disconnected during public key broadcast")
             except Exception as e:
                 logger.error(f"Failed to send public key to {name}: {e}")
-    
+
     async def handle_message(self, sender, recipient, encrypted_message):
         """Route encrypted message to recipient"""
         if recipient not in self.clients:
             logger.warning(f"Recipient {recipient} not found")
             return False
-        
+
         recipient_ws = self.clients[recipient]
         message = json.dumps({
             'type': 'message',
             'from': sender,
             'encrypted_data': encrypted_message
         })
-        
+
         try:
             await recipient_ws.send(message)
             logger.info(f"Message routed from {sender} to {recipient}")
@@ -158,16 +156,25 @@ class SpectreServer:
         except Exception as e:
             logger.error(f"Failed to send message to {recipient}: {e}")
             return False
-    
+
+    async def process_request(self, connection, request):
+        """Serve health checks over the websocket port."""
+        if request.path in {"/", "/health"} and request.headers.get("Upgrade", "").lower() != "websocket":
+            return Response(
+                200,
+                "OK",
+                Headers([("Content-Type", "text/plain; charset=utf-8")]),
+                b"OK",
+            )
+        return None
+
     async def handle_client(self, websocket):
         """Handle client connection"""
         username = None
-        
+
         try:
-            # Wait for registration
             async for message in websocket:
                 try:
-                    # Enforce message size limit
                     if len(message) > MAX_MESSAGE_SIZE:
                         await websocket.send(json.dumps({
                             'type': 'error',
@@ -177,26 +184,25 @@ class SpectreServer:
 
                     data = json.loads(message)
                     msg_type = data.get('type')
-                    
+
                     if msg_type == 'register':
                         username = data.get('username', '')
                         if await self.register(websocket, username):
-                            # Send existing public keys to new user
                             for user, pubkey in self.public_keys.items():
                                 await websocket.send(json.dumps({
                                     'type': 'public_key',
                                     'username': user,
                                     'public_key': pubkey
                                 }))
-                    
+
                     elif msg_type == 'public_key':
                         if username is None:
                             continue
                         public_key = data.get('public_key', '')
                         if not public_key or len(public_key) != 64:
-                            continue  # X25519 public key is 32 bytes = 64 hex chars
+                            continue
                         await self.handle_public_key(username, public_key)
-                    
+
                     elif msg_type == 'message':
                         if username is None:
                             continue
@@ -212,11 +218,7 @@ class SpectreServer:
                             continue
                         if len(encrypted_data) > MAX_MESSAGE_SIZE:
                             continue
-                        await self.handle_message(
-                            username,
-                            recipient,
-                            encrypted_data
-                        )
+                        await self.handle_message(username, recipient, encrypted_data)
 
                     elif msg_type is not None:
                         logger.warning(f"Unknown message type: {msg_type}")
@@ -226,7 +228,7 @@ class SpectreServer:
                     logger.error(f"Malformed message missing required field {e}")
                 except Exception as e:
                     logger.error(f"Error handling message: {e}")
-        
+
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Connection closed for user {username}")
         except Exception as e:
@@ -234,33 +236,23 @@ class SpectreServer:
         finally:
             if username:
                 await self.unregister(username)
-    
-    async def health_check(self, request):
-        """Health check endpoint for Render"""
-        return web.Response(text="OK", status=200)
-    
+
     async def start(self):
         """Start the server"""
         logger.info(f"Starting Spectre server on {self.host}:{self.port}")
-        
-        # Create HTTP app for health checks
-        app = web.Application()
-        app.router.add_get('/', self.health_check)
-        app.router.add_head('/', self.health_check)
-        
-        # Start HTTP server
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-        
-        # Start WebSocket server on same port
-        async with websockets.serve(self.handle_client, self.host, self.port):
-            await asyncio.Future()  # Run forever
+        async with websockets.serve(
+            self.handle_client,
+            self.host,
+            self.port,
+            process_request=self.process_request,
+        ):
+            await asyncio.Future()
+
 
 async def main():
     server = SpectreServer(host='0.0.0.0', port=8765)
     await server.start()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

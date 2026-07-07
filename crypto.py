@@ -1,12 +1,9 @@
 import os
 import hashlib
-import hmac
-import time
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.backends import default_backend
 import blake3
 
 class SpectreCrypto:
@@ -15,7 +12,6 @@ class SpectreCrypto:
     def __init__(self):
         self.private_key = x25519.X25519PrivateKey.generate()
         self.public_key = self.private_key.public_key()
-        self._session_salt = os.urandom(32)
         
     def derive_shared_secret(self, peer_public_key_bytes):
         """X25519 ECDH + BLAKE3 KDF"""
@@ -24,13 +20,16 @@ class SpectreCrypto:
         peer_key = x25519.X25519PublicKey.from_public_bytes(peer_public_key_bytes)
         shared_secret = self.private_key.exchange(peer_key)
         
-        # HKDF with random per-session salt for key derivation
+        local_public_key_bytes = self.public_key.public_bytes_raw()
+        salt = hashlib.sha256(
+            b"|".join(sorted([local_public_key_bytes, peer_public_key_bytes]))
+        ).digest()
+
         kdf = HKDF(
             algorithm=hashes.BLAKE2b(64),
             length=32,
-            salt=self._session_salt,
+            salt=salt,
             info=b'spectre-handshake-v2',
-            backend=default_backend()
         )
         return kdf.derive(shared_secret)
     

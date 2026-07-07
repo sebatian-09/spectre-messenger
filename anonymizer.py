@@ -1,9 +1,8 @@
-import random
+import secrets
 import struct
 import time
 import zlib
 import os
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 class TrafficObfuscator:
     """Hide traffic patterns and metadata"""
@@ -16,14 +15,14 @@ class TrafficObfuscator:
         """Generate fake traffic patterns to confuse analysis"""
         patterns = []
         for _ in range(1000):
-            size = random.choice([64, 128, 256, 512, 1024])
+            size = secrets.choice([64, 128, 256, 512, 1024])
             patterns.append(os.urandom(size))
         return patterns
     
     def obfuscate_packet(self, payload):
         """Add noise, padding, and timing randomization"""
         # Add random padding
-        pad_size = random.choice(self.padding_sizes)
+        pad_size = secrets.choice(self.padding_sizes)
         padding = os.urandom(pad_size)
         
         # Store padding length in header (4 bytes)
@@ -36,7 +35,7 @@ class TrafficObfuscator:
         wrapped = header + compressed
         
         # Add random delay emulation
-        time.sleep(random.uniform(0.001, 0.05))
+        time.sleep(secrets.choice([0.001, 0.005, 0.01, 0.02, 0.05]))
         
         return wrapped
     
@@ -65,6 +64,8 @@ class TrafficObfuscator:
             raise ValueError("Padding size exceeds data length")
 
         # Remove padding using the stored length
+        if pad_size > len(decompressed):
+            raise ValueError("Invalid padding length")
         payload = decompressed[:-pad_size] if pad_size > 0 else decompressed
         
         return payload
@@ -73,7 +74,7 @@ class TrafficObfuscator:
         """Generate fake messages to confuse traffic analysis"""
         decoy = {
             'type': 'decoy',
-            'data': random.choice(self.decoy_patterns),
+            'data': secrets.choice(self.decoy_patterns),
             'timestamp': time.time(),
             'fake_route': self._generate_fake_route()
         }
@@ -81,8 +82,10 @@ class TrafficObfuscator:
     
     def _generate_fake_route(self):
         """Generate fake routing information"""
-        hops = random.randint(3, 8)
+        hops = secrets.randbelow(6) + 3
         route = []
         for _ in range(hops):
-            route.append(f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}")
+            route.append(
+                ".".join(str(secrets.randbelow(255) + 1) for _ in range(4))
+            )
         return route
