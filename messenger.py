@@ -5,8 +5,9 @@ import time
 import os
 import traceback
 import websockets
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Set
+from typing import Dict, List, Optional, Set
 
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
@@ -15,6 +16,8 @@ from mixnet import MixNode, OnionRouter
 # Replay protection: reject messages older than 30 seconds
 REPLAY_WINDOW_SECONDS = 30
 MAX_SEEN_NONCES = 10000
+# Cap buffered messages per peer awaiting a public key to bound memory usage
+MAX_PENDING_MESSAGES = 100
 
 @dataclass
 class Message:
@@ -41,6 +44,8 @@ class SpectreMessenger:
         self.connected = False
         self.online_users = set()
         self._seen_nonces: Set[str] = set()  # replay protection
+        # Messages received before a peer's public key arrives, keyed by sender
+        self._pending_messages: Dict[str, List[str]] = defaultdict(list)
         self.listener_task = None
         
     async def send_message(self, recipient, content):
@@ -162,6 +167,7 @@ class SpectreMessenger:
                         if peer != self.username:
                             self.peers[peer] = bytes.fromhex(data['public_key'])
                             print(f"✓ Received public key from {peer}")
+                            await self._flush_pending_messages(peer)
                     
                     elif data['type'] == 'message':
                         sender = data['from']
@@ -189,23 +195,41 @@ class SpectreMessenger:
             # Decode base64
             encrypted = base64.b64decode(wrapped)
             
-            # Try to decrypt with shared secret
-            if sender in self.shared_secrets:
-                try:
-                    decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
-                    self._store_decrypted_message(sender, decrypted)
-                except Exception as e:
-                    print(f"⚠️ Failed to decrypt message from {sender}: {e}")
-            else:
+            # Establish a shared secret if we don't have one yet. We must not
+            # block the listener loop waiting for the peer's public key: that
+            # key can only arrive as another message on this same loop, so
+            # polling here would deadlock. Buffer the message instead and
+            # process it once the public key is received.
+            if sender not in self.shared_secrets:
+                if sender not in self.peers:
+                    self._buffer_pending_message(sender, wrapped)
+                    print(f"⏳ No public key from {sender} yet, buffering message")
+                    return
                 print(f"⚠️ No shared secret with {sender}, establishing channel...")
                 if not await self._establish_secure_channel(sender):
                     return
 
+            try:
                 decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
                 self._store_decrypted_message(sender, decrypted)
-        
+            except Exception as e:
+                print(f"⚠️ Failed to decrypt message from {sender}: {e}")
+
         except Exception as e:
             print(f"⚠️ Error processing message: {e}")
+
+    def _buffer_pending_message(self, sender, wrapped):
+        """Buffer a message until the sender's public key arrives."""
+        pending = self._pending_messages[sender]
+        if len(pending) >= MAX_PENDING_MESSAGES:
+            pending.pop(0)  # drop oldest to bound memory
+        pending.append(wrapped)
+
+    async def _flush_pending_messages(self, peer):
+        """Re-process messages buffered while waiting for a peer's public key."""
+        pending = self._pending_messages.pop(peer, [])
+        for wrapped in pending:
+            await self._process_received_message(peer, wrapped)
 
     def _store_decrypted_message(self, sender, decrypted):
         """Validate, deduplicate, and store a decrypted message."""

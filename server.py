@@ -1,4 +1,5 @@
 import asyncio
+import http
 import json
 import logging
 import re
@@ -7,7 +8,6 @@ from collections import defaultdict
 from typing import Dict
 
 import websockets
-from websockets.http11 import Headers, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -157,13 +157,17 @@ class SpectreServer:
             logger.error(f"Failed to send message to {recipient}: {e}")
             return False
 
-    async def process_request(self, connection, request):
-        """Serve health checks over the websocket port."""
-        if request.path in {"/", "/health"} and request.headers.get("Upgrade", "").lower() != "websocket":
-            return Response(
-                200,
-                "OK",
-                Headers([("Content-Type", "text/plain; charset=utf-8")]),
+    async def process_request(self, path, request_headers):
+        """Serve health checks over the websocket port (e.g. for load balancers).
+
+        Uses the websockets legacy ``process_request(path, request_headers)``
+        signature and returns an HTTP response 3-tuple. Only non-upgrade
+        requests are answered so real WebSocket clients on "/" still handshake.
+        """
+        if path in {"/", "/health"} and request_headers.get("Upgrade", "").lower() != "websocket":
+            return (
+                http.HTTPStatus.OK,
+                [("Content-Type", "text/plain; charset=utf-8")],
                 b"OK",
             )
         return None
