@@ -70,13 +70,13 @@ async def main():
             
             elif cmd == "/tip":
                 print(f"""
-╔════════════════════════════════════╗
-║         SUPPORT THE DEVELOPER      ║
-╠════════════════════════════════════╣
-║  Bitcoin: YOUR_WALLET_ADDRESS_HERE ║
-║                                   ║
-║  Your support keeps this free!    ║
-╚════════════════════════════════════╝
+╔══════════════════════════════════════════════════╗
+║            SUPPORT THE DEVELOPER                 ║
+╠══════════════════════════════════════════════════╣
+║  Bitcoin: bc1qrhldwx8f8075we5hqhsezc61gzhffhftvafefc ║
+║                                                  ║
+║  Your support keeps this free!                   ║
+╚══════════════════════════════════════════════════╝
                 """)
             
             elif cmd == "/quit":
