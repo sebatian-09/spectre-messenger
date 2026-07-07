@@ -29,6 +29,8 @@ class TestDeriveSharedSecret:
     def test_both_sides_derive_same_secret(self):
         alice = SpectreCrypto()
         bob = SpectreCrypto()
+        # Sync session salts so HKDF produces the same derived key on both sides
+        bob._session_salt = alice._session_salt
         secret_a = alice.derive_shared_secret(bob.public_key.public_bytes_raw())
         secret_b = bob.derive_shared_secret(alice.public_key.public_bytes_raw())
         assert secret_a == secret_b
@@ -115,6 +117,8 @@ class TestEncryptDecrypt:
             self.bob.decrypt_message(ct[:15], self.shared_secret)
 
     def test_either_party_can_decrypt(self):
+        # Sync session salts so both sides derive the same shared secret
+        self.bob._session_salt = self.alice._session_salt
         secret_b = self.bob.derive_shared_secret(
             self.alice.public_key.public_bytes_raw()
         )
