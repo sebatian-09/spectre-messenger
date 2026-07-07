@@ -1,6 +1,10 @@
 import asyncio
+import re
 import sys
 from messenger import SpectreMessenger
+
+SERVER_URL_PATTERN = re.compile(r'^wss?://[^\s/$.?#].[^\s]*$')
+USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,32}$')
 
 async def main():
     print("🛡️ SPECTRE - Anonymous Encrypted Messenger")
@@ -9,8 +13,14 @@ async def main():
     server_url = input("Enter server URL (default: ws://localhost:8765): ").strip()
     if not server_url:
         server_url = 'ws://localhost:8765'
+    elif not SERVER_URL_PATTERN.match(server_url):
+        print("\u274c Invalid server URL. Must start with ws:// or wss://")
+        return
     
-    username = input("Enter your username: ")
+    username = input("Enter your username: ").strip()
+    if not USERNAME_PATTERN.match(username):
+        print("\u274c Invalid username. Use 1-32 alphanumeric characters, hyphens, or underscores.")
+        return
     messenger = SpectreMessenger(username, server_url)
     
     # Connect to server

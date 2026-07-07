@@ -34,9 +34,6 @@ class TrafficObfuscator:
         # Wrap with header
         wrapped = header + compressed
         
-        # Add random delay emulation
-        time.sleep(secrets.choice([0.001, 0.005, 0.01, 0.02, 0.05]))
-        
         return wrapped
     
     def deobfuscate_packet(self, wrapped_packet):
@@ -64,8 +61,6 @@ class TrafficObfuscator:
             raise ValueError("Padding size exceeds data length")
 
         # Remove padding using the stored length
-        if pad_size > len(decompressed):
-            raise ValueError("Invalid padding length")
         payload = decompressed[:-pad_size] if pad_size > 0 else decompressed
         
         return payload

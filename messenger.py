@@ -1,9 +1,9 @@
 import asyncio
 import json
 import base64
+import logging
 import time
 import os
-import traceback
 import websockets
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Set
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
 from mixnet import MixNode, OnionRouter
+
+logger = logging.getLogger(__name__)
 
 # Replay protection: reject messages older than 30 seconds
 REPLAY_WINDOW_SECONDS = 30
@@ -184,8 +186,8 @@ class SpectreMessenger:
         except websockets.exceptions.ConnectionClosed as e:
             print(f"❌ Disconnected from server: {e}")
         except Exception as e:
+            logger.debug(f"Listener error: {e}", exc_info=True)
             print(f"❌ Error receiving messages: {e}")
-            traceback.print_exc()
         finally:
             self.connected = False
     
