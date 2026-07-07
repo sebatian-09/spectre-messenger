@@ -5,12 +5,16 @@ import time
 import os
 import websockets
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Set
 import hashlib
 
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
 from mixnet import MixNode, OnionRouter
+
+# Replay protection: reject messages older than 30 seconds
+REPLAY_WINDOW_SECONDS = 30
+MAX_SEEN_NONCES = 10000
 
 @dataclass
 class Message:
@@ -36,6 +40,7 @@ class SpectreMessenger:
         self.websocket = None
         self.connected = False
         self.online_users = set()
+        self._seen_nonces: Set[str] = set()  # replay protection
         
     async def send_message(self, recipient, content):
         """Send an anonymous, encrypted message"""
@@ -168,9 +173,19 @@ class SpectreMessenger:
                     data = json.loads(decrypted)
                     
                     # Verify timestamp (prevent replay attacks)
-                    if time.time() - data['timestamp'] > 300:
-                        print(f"⚠️ Message from {sender} expired")
+                    msg_age = time.time() - data['timestamp']
+                    if msg_age > REPLAY_WINDOW_SECONDS or msg_age < -5:
+                        print(f"⚠️ Message from {sender} rejected (timestamp out of range)")
                         return
+
+                    # Reject duplicate nonces (replay detection)
+                    nonce = data.get('nonce', '')
+                    if nonce in self._seen_nonces:
+                        print(f"⚠️ Replay detected from {sender}")
+                        return
+                    self._seen_nonces.add(nonce)
+                    if len(self._seen_nonces) > MAX_SEEN_NONCES:
+                        self._seen_nonces.clear()
                     
                     print(f"\n📩 Message from {sender}: {data['content']}")
                     self.message_history.append({

@@ -42,14 +42,28 @@ class TrafficObfuscator:
     
     def deobfuscate_packet(self, wrapped_packet):
         """Remove obfuscation"""
+        if len(wrapped_packet) < 5:  # 4-byte header + at least 1 byte
+            raise ValueError("Packet too short")
+
         # Extract padding length from header
         header = wrapped_packet[:4]
         pad_size = struct.unpack('!I', header)[0]
-        
+
+        # Validate pad_size against known valid sizes
+        if pad_size not in self.padding_sizes and pad_size != 0:
+            raise ValueError("Invalid padding size")
+
         # Decompress
         compressed = wrapped_packet[4:]
-        decompressed = zlib.decompress(compressed)
-        
+        try:
+            decompressed = zlib.decompress(compressed)
+        except zlib.error as e:
+            raise ValueError(f"Decompression failed: {e}")
+
+        # Validate that pad_size doesn't exceed payload
+        if pad_size > len(decompressed):
+            raise ValueError("Padding size exceeds data length")
+
         # Remove padding using the stored length
         payload = decompressed[:-pad_size] if pad_size > 0 else decompressed
         
