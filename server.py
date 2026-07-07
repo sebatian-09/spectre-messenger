@@ -159,7 +159,7 @@ class SpectreServer:
 
     async def process_request(self, connection, request):
         """Serve health checks over the websocket port."""
-        if request.path in {"/", "/health"}:
+        if request.path in {"/", "/health"} and request.headers.get("Upgrade", "").lower() != "websocket":
             return Response(
                 200,
                 "OK",
