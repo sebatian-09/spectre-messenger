@@ -11,11 +11,12 @@ import blake3
 
 class SpectreCrypto:
     """Military-grade encryption with forward secrecy"""
+
+    _KDF_SALT = b'spectre-handshake-salt-v2'
     
     def __init__(self):
         self.private_key = x25519.X25519PrivateKey.generate()
         self.public_key = self.private_key.public_key()
-        self._session_salt = os.urandom(32)
         
     def derive_shared_secret(self, peer_public_key_bytes):
         """X25519 ECDH + BLAKE3 KDF"""
@@ -24,11 +25,12 @@ class SpectreCrypto:
         peer_key = x25519.X25519PublicKey.from_public_bytes(peer_public_key_bytes)
         shared_secret = self.private_key.exchange(peer_key)
         
-        # HKDF with random per-session salt for key derivation
+        # A fixed, public salt keeps derivation deterministic so both peers
+        # arrive at the same key; confidentiality comes from the ECDH secret.
         kdf = HKDF(
             algorithm=hashes.BLAKE2b(64),
             length=32,
-            salt=self._session_salt,
+            salt=self._KDF_SALT,
             info=b'spectre-handshake-v2',
             backend=default_backend()
         )

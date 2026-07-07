@@ -190,38 +190,41 @@ class SpectreMessenger:
             # Decode base64
             encrypted = base64.b64decode(wrapped)
             
-            # Try to decrypt with shared secret
-            if sender in self.shared_secrets:
-                try:
-                    decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
-                    data = json.loads(decrypted)
-                    
-                    # Verify timestamp (prevent replay attacks)
-                    msg_age = time.time() - data['timestamp']
-                    if msg_age > REPLAY_WINDOW_SECONDS or msg_age < -5:
-                        print(f"⚠️ Message from {sender} rejected (timestamp out of range)")
-                        return
-
-                    # Reject duplicate nonces (replay detection)
-                    nonce = data.get('nonce', '')
-                    if nonce in self._seen_nonces:
-                        print(f"⚠️ Replay detected from {sender}")
-                        return
-                    self._seen_nonces.add(nonce)
-                    if len(self._seen_nonces) > MAX_SEEN_NONCES:
-                        self._seen_nonces.clear()
-                    
-                    print(f"\n📩 Message from {sender}: {data['content']}")
-                    self.message_history.append({
-                        'from': sender,
-                        'content': data['content'],
-                        'timestamp': data['timestamp']
-                    })
-                except Exception as e:
-                    print(f"⚠️ Failed to decrypt message from {sender}: {e}")
-            else:
+            # Establish the shared secret on demand so the first message from a
+            # new peer is decrypted rather than dropped.
+            if sender not in self.shared_secrets:
                 print(f"⚠️ No shared secret with {sender}, establishing channel...")
-                await self._establish_secure_channel(sender)
+                if not await self._establish_secure_channel(sender):
+                    print(f"⚠️ Could not establish channel with {sender}; message dropped")
+                    return
+            
+            try:
+                decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
+                data = json.loads(decrypted)
+                
+                # Verify timestamp (prevent replay attacks)
+                msg_age = time.time() - data['timestamp']
+                if msg_age > REPLAY_WINDOW_SECONDS or msg_age < -5:
+                    print(f"⚠️ Message from {sender} rejected (timestamp out of range)")
+                    return
+
+                # Reject duplicate nonces (replay detection)
+                nonce = data.get('nonce', '')
+                if nonce in self._seen_nonces:
+                    print(f"⚠️ Replay detected from {sender}")
+                    return
+                self._seen_nonces.add(nonce)
+                if len(self._seen_nonces) > MAX_SEEN_NONCES:
+                    self._seen_nonces.clear()
+                
+                print(f"\n📩 Message from {sender}: {data['content']}")
+                self.message_history.append({
+                    'from': sender,
+                    'content': data['content'],
+                    'timestamp': data['timestamp']
+                })
+            except Exception as e:
+                print(f"⚠️ Failed to decrypt message from {sender}: {e}")
         
         except Exception as e:
             print(f"⚠️ Error processing message: {e}")

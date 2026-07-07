@@ -5,8 +5,8 @@ import json
 import logging
 import time
 from collections import defaultdict
+from http import HTTPStatus
 from typing import Dict, Set
-from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -235,27 +235,23 @@ class SpectreServer:
             if username:
                 await self.unregister(username)
     
-    async def health_check(self, request):
-        """Health check endpoint for Render"""
-        return web.Response(text="OK", status=200)
+    async def health_check(self, path, request_headers):
+        """Answer plain HTTP health checks; let WebSocket upgrades through."""
+        if request_headers.get("Upgrade", "").lower() == "websocket":
+            return None
+        return HTTPStatus.OK, [], b"OK\n"
     
     async def start(self):
         """Start the server"""
         logger.info(f"Starting Spectre server on {self.host}:{self.port}")
         
-        # Create HTTP app for health checks
-        app = web.Application()
-        app.router.add_get('/', self.health_check)
-        app.router.add_head('/', self.health_check)
-        
-        # Start HTTP server
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-        
-        # Start WebSocket server on same port
-        async with websockets.serve(self.handle_client, self.host, self.port):
+        # Serve WebSocket clients and plain HTTP health checks on one port.
+        async with websockets.serve(
+            self.handle_client,
+            self.host,
+            self.port,
+            process_request=self.health_check,
+        ):
             await asyncio.Future()  # Run forever
 
 async def main():
