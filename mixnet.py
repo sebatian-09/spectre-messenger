@@ -1,8 +1,12 @@
 import asyncio
 import json
 import base64
+import binascii
+import logging
 import random
 import time
+
+logger = logging.getLogger(__name__)
 
 class MixNode:
     """Mix network node that batches and delays messages"""
@@ -89,5 +93,7 @@ class OnionRouter:
         try:
             data = json.loads(base64.b64decode(wrapped_message))
             return data['payload']
-        except Exception:
+        except (json.JSONDecodeError, binascii.Error, ValueError, KeyError, TypeError) as e:
+            # Not an onion-wrapped layer (e.g. already-unwrapped payload); pass through.
+            logger.debug(f"unwrap_message: treating input as unwrapped payload ({e})")
             return wrapped_message

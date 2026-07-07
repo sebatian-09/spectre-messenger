@@ -3,14 +3,18 @@ import json
 import base64
 import time
 import os
+import traceback
 import websockets
 from dataclasses import dataclass
-from typing import Optional
-import hashlib
+from typing import Optional, Set
 
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
 from mixnet import MixNode, OnionRouter
+
+# Replay protection: reject messages older than 30 seconds
+REPLAY_WINDOW_SECONDS = 30
+MAX_SEEN_NONCES = 10000
 
 @dataclass
 class Message:
@@ -36,6 +40,8 @@ class SpectreMessenger:
         self.websocket = None
         self.connected = False
         self.online_users = set()
+        self._seen_nonces: Set[str] = set()  # replay protection
+        self.listener_task = None
         
     async def send_message(self, recipient, content):
         """Send an anonymous, encrypted message"""
@@ -51,6 +57,7 @@ class SpectreMessenger:
         # 1. Get or establish shared secret
         if recipient not in self.shared_secrets:
             if not await self._establish_secure_channel(recipient):
+                print(f"❌ Could not establish secure channel with {recipient}")
                 return False
         
         secret = self.shared_secrets[recipient]
@@ -77,11 +84,19 @@ class SpectreMessenger:
         wrapped = base64.b64encode(encrypted).decode()
         
         # 5. Send through network
-        await self.websocket.send(json.dumps({
-            'type': 'message',
-            'to': recipient,
-            'encrypted_data': wrapped
-        }))
+        try:
+            await self.websocket.send(json.dumps({
+                'type': 'message',
+                'to': recipient,
+                'encrypted_data': wrapped
+            }))
+        except websockets.exceptions.ConnectionClosed:
+            print("❌ Connection lost while sending message")
+            self.connected = False
+            return False
+        except Exception as e:
+            print(f"❌ Failed to send message to {recipient}: {e}")
+            return False
         
         print(f"✓ Message sent anonymously to {recipient}")
         return True
@@ -107,12 +122,24 @@ class SpectreMessenger:
             self.connected = True
             print(f"✓ Connected to server as {self.username}")
             
-            # Start listening for messages
-            listener_task = asyncio.create_task(self._listen_for_messages())
-            listener_task.add_done_callback(lambda t: print(f"Listener task ended: {t.exception() if t.exception() else 'normally'}"))
+            # Start listening for messages (keep a reference so the task isn't GC'd)
+            self.listener_task = asyncio.create_task(self._listen_for_messages())
+            self.listener_task.add_done_callback(self._on_listener_done)
             
         except Exception as e:
             print(f"❌ Failed to connect to server: {e}")
+            self.connected = False
+            self.websocket = None
+
+    def _on_listener_done(self, task):
+        """Report why the listener task stopped."""
+        self.connected = False
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            print(f"❌ Listener task stopped with error: {exc}")
     
     async def _listen_for_messages(self):
         """Listen for incoming messages from server"""
@@ -150,11 +177,11 @@ class SpectreMessenger:
         
         except websockets.exceptions.ConnectionClosed as e:
             print(f"❌ Disconnected from server: {e}")
-            self.connected = False
         except Exception as e:
             print(f"❌ Error receiving messages: {e}")
-            import traceback
             traceback.print_exc()
+        finally:
+            self.connected = False
     
     async def _process_received_message(self, sender, wrapped):
         """Process and decrypt received message"""
@@ -166,19 +193,7 @@ class SpectreMessenger:
             if sender in self.shared_secrets:
                 try:
                     decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
-                    data = json.loads(decrypted)
-                    
-                    # Verify timestamp (prevent replay attacks)
-                    if time.time() - data['timestamp'] > 300:
-                        print(f"⚠️ Message from {sender} expired")
-                        return
-                    
-                    print(f"\n📩 Message from {sender}: {data['content']}")
-                    self.message_history.append({
-                        'from': sender,
-                        'content': data['content'],
-                        'timestamp': data['timestamp']
-                    })
+                    self._store_decrypted_message(sender, decrypted)
                 except Exception as e:
                     print(f"⚠️ Failed to decrypt message from {sender}: {e}")
             else:
@@ -187,21 +202,36 @@ class SpectreMessenger:
                     return
 
                 decrypted = self.crypto.decrypt_message(encrypted, self.shared_secrets[sender])
-                data = json.loads(decrypted)
-
-                if time.time() - data['timestamp'] > 300:
-                    print(f"⚠ Message from {sender} expired")
-                    return
-
-                print(f"\n📩 Message from {sender}: {data['content']}")
-                self.message_history.append({
-                    'from': sender,
-                    'content': data['content'],
-                    'timestamp': data['timestamp']
-                })
+                self._store_decrypted_message(sender, decrypted)
         
         except Exception as e:
             print(f"⚠️ Error processing message: {e}")
+
+    def _store_decrypted_message(self, sender, decrypted):
+        """Validate, deduplicate, and store a decrypted message."""
+        data = json.loads(decrypted)
+
+        # Verify timestamp (prevent replay attacks)
+        msg_age = time.time() - data['timestamp']
+        if msg_age > REPLAY_WINDOW_SECONDS or msg_age < -5:
+            print(f"⚠️ Message from {sender} rejected (timestamp out of range)")
+            return
+
+        # Reject duplicate nonces (replay detection)
+        nonce = data.get('nonce', '')
+        if nonce in self._seen_nonces:
+            print(f"⚠️ Replay detected from {sender}")
+            return
+        self._seen_nonces.add(nonce)
+        if len(self._seen_nonces) > MAX_SEEN_NONCES:
+            self._seen_nonces.clear()
+
+        print(f"\n📩 Message from {sender}: {data['content']}")
+        self.message_history.append({
+            'from': sender,
+            'content': data['content'],
+            'timestamp': data['timestamp']
+        })
     
     async def _establish_secure_channel(self, peer):
         """Establish secure channel with forward secrecy"""
@@ -218,7 +248,11 @@ class SpectreMessenger:
                 return False
         
         # Generate shared secret
-        secret = self.crypto.derive_shared_secret(self.peers[peer])
+        try:
+            secret = self.crypto.derive_shared_secret(self.peers[peer])
+        except Exception as e:
+            print(f"❌ Failed to derive shared secret with {peer}: {e}")
+            return False
         self.shared_secrets[peer] = secret
         
         print(f"✓ Secure channel established with {peer}")
