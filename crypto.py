@@ -34,24 +34,27 @@ class SpectreCrypto:
         )
         return kdf.derive(shared_secret)
     
-    def encrypt_message(self, message, shared_secret):
-        """ChaCha20-Poly1305 with random nonce"""
+    @staticmethod
+    def _derive_encryption_key(shared_secret):
+        """Validate the shared secret and derive the ChaCha20-Poly1305 key"""
         if not isinstance(shared_secret, bytes) or len(shared_secret) != 32:
             raise ValueError("Invalid shared secret")
-        key = blake3.blake3(shared_secret + b'encrypt').digest(length=32)
-        nonce = os.urandom(12)
+        return blake3.blake3(shared_secret + b'encrypt').digest(length=32)
+    
+    def encrypt_message(self, message, shared_secret):
+        """ChaCha20-Poly1305 with random nonce"""
+        key = self._derive_encryption_key(shared_secret)
+        nonce = os.urandom(12)  # ChaCha20 uses 12-byte nonce
         cipher = ChaCha20Poly1305(key)
         ciphertext = cipher.encrypt(nonce, message.encode(), b'')
         return nonce + ciphertext
     
     def decrypt_message(self, encrypted_data, shared_secret):
         """Decrypt with authentication"""
-        if not isinstance(shared_secret, bytes) or len(shared_secret) != 32:
-            raise ValueError("Invalid shared secret")
         if len(encrypted_data) < 13:  # 12-byte nonce + at least 1 byte
             raise ValueError("Ciphertext too short")
         nonce = encrypted_data[:12]
         ciphertext = encrypted_data[12:]
-        key = blake3.blake3(shared_secret + b'encrypt').digest(length=32)
+        key = self._derive_encryption_key(shared_secret)
         cipher = ChaCha20Poly1305(key)
         return cipher.decrypt(nonce, ciphertext, b'').decode()

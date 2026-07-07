@@ -12,6 +12,7 @@ import hashlib
 from crypto import SpectreCrypto
 from anonymizer import TrafficObfuscator
 from mixnet import MixNode, OnionRouter
+from netutils import send_json
 
 # Replay protection: reject messages older than 30 seconds
 REPLAY_WINDOW_SECONDS = 30
@@ -86,11 +87,11 @@ class SpectreMessenger:
         
         # 5. Send through network
         try:
-            await self.websocket.send(json.dumps({
+            await send_json(self.websocket, {
                 'type': 'message',
                 'to': recipient,
                 'encrypted_data': wrapped
-            }))
+            })
         except websockets.exceptions.ConnectionClosed:
             print("❌ Connection lost while sending message")
             self.connected = False
@@ -108,17 +109,17 @@ class SpectreMessenger:
             self.websocket = await websockets.connect(self.server_url)
             
             # Register with server
-            await self.websocket.send(json.dumps({
+            await send_json(self.websocket, {
                 'type': 'register',
                 'username': self.username
-            }))
+            })
             
             # Send our public key
             pubkey_hex = self.crypto.public_key.public_bytes_raw().hex()
-            await self.websocket.send(json.dumps({
+            await send_json(self.websocket, {
                 'type': 'public_key',
                 'public_key': pubkey_hex
-            }))
+            })
             
             self.connected = True
             print(f"✓ Connected to server as {self.username}")
